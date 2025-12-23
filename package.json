@@ -1,0 +1,28 @@
+{
+  "name": "focus-holdem",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev:prepare": "cp public/manifest.json dist/ && cp -r public/icons dist/",
+    "dev": "npm run dev:prepare && vite build --watch",
+    "build": "tsc && vite build && cp public/manifest.json dist/ && cp -r public/icons dist/",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "pokersolver": "^2.1.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.268",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.0.0",
+    "autoprefixer": "^10.4.19",
+    "jimp": "^1.6.0",
+    "postcss": "^8.4.38",
+    "tailwindcss": "^3.4.4",
+    "typescript": "^5.5.3",
+    "vite": "^4.5.3"
+  }
+}

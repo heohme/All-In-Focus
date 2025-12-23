@@ -1,0 +1,874 @@
+import { useState, useEffect } from 'react';
+import { GameState, UserSettings, Statistics } from '../types';
+import { Storage } from '../utils/storage';
+import { formatTime, getRevealedCardsCount, getCardDisplay, getSuitColor } from '../utils/poker';
+
+export default function Popup() {
+  const [gameState, setGameState] = useState<GameState | null>(null);
+  const [userSettings, setUserSettings] = useState<UserSettings | null>(null);
+  const [statistics, setStatistics] = useState<Statistics | null>(null);
+  const [taskName, setTaskName] = useState('');
+  const [remainingTime, setRemainingTime] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [showSettings, setShowSettings] = useState(false);
+  const [newSite, setNewSite] = useState('');
+  const [confirmDialog, setConfirmDialog] = useState<{
+    show: boolean;
+    title: string;
+    message: string;
+    onConfirm: () => void;
+  } | null>(null);
+
+  // Load initial data
+  useEffect(() => {
+    loadData();
+
+    // Listen for storage changes
+    const listener = (changes: { [key: string]: chrome.storage.StorageChange }) => {
+      if (changes.gameState) {
+        setGameState(changes.gameState.newValue);
+      }
+      if (changes.userSettings) {
+        setUserSettings(changes.userSettings.newValue);
+      }
+      if (changes.statistics) {
+        setStatistics(changes.statistics.newValue);
+      }
+    };
+
+    chrome.storage.onChanged.addListener(listener);
+
+    return () => {
+      chrome.storage.onChanged.removeListener(listener);
+    };
+  }, []);
+
+  // Update remaining time every second
+  useEffect(() => {
+    if (gameState?.status !== 'playing') {
+      return;
+    }
+
+    const updateTime = () => {
+      const elapsed = Date.now() - gameState.startTime;
+      const remaining = Math.max(0, gameState.duration - elapsed);
+      setRemainingTime(remaining);
+    };
+
+    updateTime();
+    const interval = setInterval(updateTime, 1000);
+
+    return () => clearInterval(interval);
+  }, [gameState]);
+
+  async function loadData() {
+    try {
+      const [gs, us, stats] = await Promise.all([
+        Storage.getGameState(),
+        Storage.getUserSettings(),
+        Storage.getStatistics(),
+      ]);
+
+      setGameState(gs);
+      setUserSettings(us);
+      setStatistics(stats);
+    } catch (error) {
+      console.error('Error loading data:', error);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function startGame() {
+    if (!taskName.trim()) {
+      alert('请输入任务名称');
+      return;
+    }
+
+    if (!userSettings || userSettings.chips < 1) {
+      alert('筹码不足，无法开始');
+      return;
+    }
+
+    try {
+      await chrome.runtime.sendMessage({
+        type: 'START_GAME',
+        taskName: taskName.trim(),
+      });
+
+      setTaskName('');
+    } catch (error) {
+      console.error('Error starting game:', error);
+      alert('启动游戏失败');
+    }
+  }
+
+  function giveUp() {
+    setConfirmDialog({
+      show: true,
+      title: '确认放弃',
+      message: '确定要放弃吗？你将失去盲注（1 筹码）。',
+      onConfirm: async () => {
+        setConfirmDialog(null);
+        console.log('User confirmed fold, proceeding...');
+
+        try {
+          console.log('Sending FOLD_GAME message...');
+          const response = await chrome.runtime.sendMessage({ type: 'FOLD_GAME' });
+          console.log('Fold game response:', response);
+
+          if (response?.error) {
+            alert('放弃失败: ' + response.error);
+          } else {
+            console.log('Fold successful, game should end now');
+          }
+        } catch (error) {
+          console.error('Error folding game:', error);
+          alert('放弃失败: ' + error);
+        }
+      }
+    });
+  }
+
+  async function settleGame() {
+    try {
+      console.log('Settling game...');
+      const message = { type: 'SETTLE_GAME' };
+      console.log('Sending message:', message);
+
+      const response = await chrome.runtime.sendMessage(message);
+      console.log('Settle game response:', response);
+
+      if (response?.error) {
+        console.error('Settlement error:', response.error);
+        alert('结算失败: ' + response.error);
+      } else {
+        console.log('Settlement successful');
+      }
+    } catch (error) {
+      console.error('Error settling game:', error);
+      alert('结算失败: ' + error);
+    }
+  }
+
+  function resetStorage() {
+    setConfirmDialog({
+      show: true,
+      title: '确认重置',
+      message: '确定要重置所有数据吗？这将清除筹码和统计数据，并重新开始游戏。',
+      onConfirm: async () => {
+        setConfirmDialog(null);
+        console.log('User confirmed reset, proceeding...');
+
+        try {
+          console.log('Sending RESET_STORAGE message...');
+          const response = await chrome.runtime.sendMessage({ type: 'RESET_STORAGE' });
+          console.log('Reset response:', response);
+
+          console.log('Reloading data...');
+          await loadData();
+          console.log('Data reloaded successfully');
+
+          alert('数据已重置！现在可以开始新游戏了。');
+        } catch (error) {
+          console.error('Error resetting storage:', error);
+          alert('重置失败: ' + error);
+        }
+      }
+    });
+  }
+
+  async function startNewGame() {
+    try {
+      console.log('Starting new game...');
+      await chrome.runtime.sendMessage({ type: 'START_NEW_GAME' });
+      console.log('New game started, reloading data...');
+      await loadData();
+    } catch (error) {
+      console.error('Error starting new game:', error);
+      alert('开始新游戏失败: ' + error);
+    }
+  }
+
+  async function toggleTestMode() {
+    if (!userSettings) return;
+
+    try {
+      const newSettings = {
+        ...userSettings,
+        testMode: !userSettings.testMode,
+      };
+      await Storage.setUserSettings(newSettings);
+      setUserSettings(newSettings);
+    } catch (error) {
+      console.error('Error toggling test mode:', error);
+      alert('切换失败: ' + error);
+    }
+  }
+
+  async function addBlockedSite() {
+    if (!userSettings || !newSite.trim()) return;
+
+    try {
+      // Normalize the site input
+      // Input examples: "zhihu", "zhihu.com", "www.zhihu.com", "https://zhihu.com"
+      // Output: "zhihu.com" (or "zhihu.cn" if specified)
+      let domain = newSite.trim();
+
+      // Remove protocol if present
+      domain = domain.replace(/^https?:\/\//, '');
+
+      // Remove www. prefix
+      domain = domain.replace(/^www\./, '');
+
+      // Remove paths
+      domain = domain.replace(/\/.*$/, '');
+
+      // If no TLD specified, assume .com
+      if (!domain.includes('.')) {
+        domain = `${domain}.com`;
+      }
+
+      // Check if already exists
+      if (userSettings.blockedSites.includes(domain)) {
+        alert('该网站已在屏蔽列表中');
+        return;
+      }
+
+      const newSettings = {
+        ...userSettings,
+        blockedSites: [...userSettings.blockedSites, domain],
+      };
+      await Storage.setUserSettings(newSettings);
+      setUserSettings(newSettings);
+      setNewSite('');
+    } catch (error) {
+      console.error('Error adding blocked site:', error);
+      alert('添加失败: ' + error);
+    }
+  }
+
+  async function removeBlockedSite(index: number) {
+    if (!userSettings) return;
+
+    try {
+      const newSettings = {
+        ...userSettings,
+        blockedSites: userSettings.blockedSites.filter((_, i) => i !== index),
+      };
+      await Storage.setUserSettings(newSettings);
+      setUserSettings(newSettings);
+    } catch (error) {
+      console.error('Error removing blocked site:', error);
+      alert('移除失败: ' + error);
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-gray-900 via-slate-800 to-gray-900 text-white">
+        <div className="text-lg animate-pulse">加载中...</div>
+      </div>
+    );
+  }
+
+  if (!gameState || !userSettings) {
+    return (
+      <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-gray-900 via-slate-800 to-gray-900 text-white">
+        <div className="text-lg">加载游戏失败</div>
+      </div>
+    );
+  }
+
+  // Finished view (showing results)
+  if (gameState.status === 'finished') {
+    const result = gameState.result || 'tie';
+    const chipsWon = gameState.chipsWon || 0;
+    const resultText = result === 'win' ? '你赢了！' : result === 'lose' ? '你输了' : '平局';
+    const resultColor = result === 'win' ? 'text-green-400' : result === 'lose' ? 'text-red-400' : 'text-yellow-400';
+
+    // Helper function to check if a card is in the best hand
+    const isCardInBestHand = (card: string, bestCards: string[] | undefined): boolean => {
+      if (!bestCards) return false;
+      // Normalize card format: T -> 10, for comparison
+      const normalizedCard = card.replace('T', '10');
+      return bestCards.some(bestCard => {
+        const normalizedBestCard = bestCard.replace('T', '10');
+        return normalizedCard === normalizedBestCard;
+      });
+    };
+
+    // Determine which hand won for highlighting
+    const winningBestCards = result === 'win'
+      ? gameState.myBestCards
+      : result === 'lose'
+      ? gameState.villainBestCards
+      : undefined; // No highlighting on tie
+
+    return (
+      <div className="w-full h-full bg-gradient-to-br from-slate-900 via-emerald-950 to-slate-900 text-white flex justify-center">
+        <div className="relative w-full max-w-sm h-full flex flex-col shadow-2xl backdrop-blur-sm">
+        {/* Decorative gradient overlay */}
+        <div className="absolute inset-0 bg-gradient-to-br from-green-500/5 via-transparent to-blue-500/5 pointer-events-none -z-10"></div>
+
+        {/* Header */}
+        <div className="relative bg-gradient-to-r from-black/60 via-black/50 to-black/60 backdrop-blur-md px-6 py-3 text-center shrink-0 border-b border-white/10 shadow-lg">
+          <div className={`text-2xl font-bold ${resultColor} drop-shadow-lg animate-[fadeIn_0.5s_ease-out]`}>{resultText}</div>
+          <div className="text-lg font-semibold bg-gradient-to-r from-yellow-300 via-yellow-400 to-yellow-300 bg-clip-text text-transparent animate-[fadeIn_0.7s_ease-out]">
+            +{chipsWon.toFixed(1)} 筹码
+          </div>
+        </div>
+
+        {/* Task Name */}
+        <div className="relative px-6 py-2 bg-gradient-to-r from-black/20 via-black/30 to-black/20 text-center text-xs text-gray-300 shrink-0 truncate border-b border-white/5">
+          <span className="font-medium">任务：{gameState.taskName}</span>
+        </div>
+
+        {/* Table Area */}
+        <div className="relative flex-1 px-6 py-4 flex flex-col justify-around min-h-[300px]">
+          {/* Poker table felt effect */}
+          <div className="absolute inset-0 bg-gradient-to-b from-emerald-900/20 via-green-900/30 to-emerald-900/20 pointer-events-none"></div>
+
+          {/* Community Cards */}
+          <div className="relative flex justify-center gap-2 animate-[fadeIn_0.6s_ease-out]">
+            {gameState.communityCards.slice(0, 5).map((card, index) => (
+              <div key={index} style={{ animationDelay: `${index * 0.1}s` }} className="animate-[cardFlip_0.5s_ease-out]">
+                <Card
+                  card={card}
+                  highlight={isCardInBestHand(card, winningBestCards)}
+                />
+              </div>
+            ))}
+          </div>
+
+          {/* Villain Hand - NOW REVEALED */}
+          <div className="relative flex flex-col items-center animate-[fadeIn_0.8s_ease-out]">
+            <div className="text-xs font-semibold text-gray-400 mb-1.5 bg-black/30 px-3 py-1 rounded-full border border-white/10">
+              对手的牌
+            </div>
+            <div className="flex gap-2 mb-2">
+              {gameState.villainHand.map((card, index) => (
+                <div key={index} style={{ animationDelay: `${index * 0.1}s` }} className="animate-[cardFlip_0.5s_ease-out]">
+                  <Card
+                    card={card}
+                    highlight={result === 'lose' && isCardInBestHand(card, gameState.villainBestCards)}
+                  />
+                </div>
+              ))}
+            </div>
+            {gameState.villainHandDescription && (
+              <div className="text-sm font-bold bg-gradient-to-r from-blue-400 to-cyan-400 bg-clip-text text-transparent px-3 py-1 rounded-lg bg-black/40 border border-blue-500/30">
+                {gameState.villainHandDescription}
+              </div>
+            )}
+          </div>
+
+          {/* My Hand */}
+          <div className="relative flex flex-col items-center animate-[fadeIn_1s_ease-out]">
+            <div className="text-xs font-semibold text-gray-400 mb-1.5 bg-black/30 px-3 py-1 rounded-full border border-white/10">
+              你的手牌
+            </div>
+            <div className="flex gap-2 mb-2">
+              {gameState.myHand.map((card, index) => (
+                <div key={index} style={{ animationDelay: `${index * 0.1}s` }} className="animate-[cardFlip_0.5s_ease-out]">
+                  <Card
+                    card={card}
+                    highlight={result === 'win' && isCardInBestHand(card, gameState.myBestCards)}
+                  />
+                </div>
+              ))}
+            </div>
+            {gameState.myHandDescription && (
+              <div className="text-sm font-bold bg-gradient-to-r from-yellow-300 to-amber-400 bg-clip-text text-transparent px-3 py-1 rounded-lg bg-black/40 border border-yellow-500/30">
+                {gameState.myHandDescription}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Action Bar */}
+        <div className="relative px-6 py-4 bg-gradient-to-t from-black/70 via-black/60 to-black/40 backdrop-blur-md space-y-2.5 shrink-0 border-t border-white/10 shadow-2xl">
+          <div className="text-center text-sm text-gray-300">
+            余额: <span className="text-lg font-bold bg-gradient-to-r from-yellow-300 via-yellow-400 to-amber-300 bg-clip-text text-transparent drop-shadow-[0_0_8px_rgba(250,204,21,0.5)]">
+              {userSettings.chips.toFixed(1)}
+            </span> <span className="text-xs text-gray-400">筹码</span>
+          </div>
+          <button
+            onClick={startNewGame}
+            className="w-full py-3 bg-gradient-to-r from-green-600 via-emerald-600 to-green-600 hover:from-green-500 hover:via-emerald-500 hover:to-green-500 rounded-xl font-bold transition-all duration-300 text-base shadow-lg hover:shadow-green-500/50 hover:scale-[1.02] active:scale-[0.98] border border-green-400/20"
+          >
+            🎯 再开一局
+          </button>
+          <button
+            onClick={resetStorage}
+            className="w-full py-2 bg-gradient-to-r from-gray-700 to-gray-600 hover:from-gray-600 hover:to-gray-500 text-gray-300 text-xs rounded-lg transition-all duration-300 hover:shadow-lg border border-gray-500/20"
+          >
+            🔧 重置数据
+          </button>
+        </div>
+
+        {/* Confirmation Dialog */}
+        {confirmDialog && (
+          <div className="fixed inset-0 bg-black/90 backdrop-blur-sm flex items-center justify-center z-50 animate-[fadeIn_0.2s_ease-out]">
+            <div className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-2xl p-6 max-w-xs mx-4 border-2 border-white/10 shadow-2xl animate-[fadeIn_0.3s_ease-out]">
+              <h3 className="text-xl font-bold text-white mb-3 flex items-center gap-2">
+                <span className="text-2xl">⚠️</span>
+                {confirmDialog.title}
+              </h3>
+              <p className="text-sm text-gray-300 mb-6 leading-relaxed">{confirmDialog.message}</p>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setConfirmDialog(null)}
+                  className="flex-1 py-2.5 px-4 bg-gradient-to-r from-gray-600 to-gray-700 hover:from-gray-500 hover:to-gray-600 text-white text-sm rounded-xl font-semibold transition-all duration-300 shadow-lg hover:shadow-gray-500/50 hover:scale-105 active:scale-95 border border-gray-500/20"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={confirmDialog.onConfirm}
+                  className="flex-1 py-2.5 px-4 bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white text-sm rounded-xl font-semibold transition-all duration-300 shadow-lg hover:shadow-red-500/50 hover:scale-105 active:scale-95 border border-red-400/20"
+                >
+                  确定
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        </div>
+      </div>
+    );
+  }
+
+  // Setup view (not playing and not finished)
+  if (gameState.status === 'idle') {
+    return (
+      <div className="w-full h-full bg-gradient-to-br from-slate-900 via-purple-950 to-slate-900 text-white flex justify-center">
+        <div className="relative w-full max-w-sm h-full flex flex-col shadow-2xl">
+        {/* Decorative gradient overlay */}
+        <div className="absolute inset-0 bg-gradient-to-br from-purple-500/5 via-transparent to-pink-500/5 pointer-events-none -z-10"></div>
+
+        {/* Header - Fixed at top */}
+        <div className="relative shrink-0 px-6 py-4 animate-[fadeIn_0.5s_ease-out]">
+          <div className="flex justify-between items-start mb-3">
+            <button
+              onClick={() => setShowSettings(!showSettings)}
+              className="text-2xl text-gray-400 hover:text-white transition-all duration-300 hover:rotate-90 hover:scale-110"
+            >
+              ⚙️
+            </button>
+            <div className="flex-1 text-center">
+              <h1 className="text-3xl font-bold mb-2 bg-gradient-to-r from-green-400 via-emerald-400 to-teal-400 bg-clip-text text-transparent drop-shadow-[0_0_20px_rgba(16,185,129,0.5)]">
+                Focus Hold'em
+              </h1>
+            </div>
+            <div className="w-8"></div>
+          </div>
+          <div className="flex justify-center">
+            <div className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-amber-500/20 to-yellow-500/20 rounded-full border border-yellow-400/30 backdrop-blur-sm">
+              <span className="text-2xl">💰</span>
+              <span className="text-xl font-bold bg-gradient-to-r from-yellow-300 via-yellow-400 to-amber-300 bg-clip-text text-transparent drop-shadow-[0_0_8px_rgba(250,204,21,0.5)]">
+                {userSettings.chips.toFixed(1)}
+              </span>
+              <span className="text-sm text-gray-400">筹码</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Main Content - Centered vertically */}
+        <div className="flex-1 flex flex-col justify-center px-6 py-4 space-y-4 min-h-0">
+          {/* Stats */}
+          {statistics && statistics.totalGames > 0 && (
+            <div className="bg-gradient-to-br from-black/40 to-black/30 rounded-xl p-4 border border-white/10 backdrop-blur-md shadow-xl animate-[fadeIn_0.5s_ease-out]">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="bg-white/5 rounded-lg p-2 border border-white/10">
+                  <div className="text-xs text-gray-400">游戏数</div>
+                  <div className="text-lg font-bold text-white">{statistics.totalGames}</div>
+                </div>
+                <div className="bg-green-500/10 rounded-lg p-2 border border-green-500/20">
+                  <div className="text-xs text-green-400">胜利</div>
+                  <div className="text-lg font-bold text-green-300">{statistics.wins}</div>
+                </div>
+                <div className="bg-red-500/10 rounded-lg p-2 border border-red-500/20">
+                  <div className="text-xs text-red-400">失败</div>
+                  <div className="text-lg font-bold text-red-300">{statistics.losses}</div>
+                </div>
+                <div className="bg-yellow-500/10 rounded-lg p-2 border border-yellow-500/20">
+                  <div className="text-xs text-yellow-400">弃牌</div>
+                  <div className="text-lg font-bold text-yellow-300">{statistics.folds}</div>
+                </div>
+              </div>
+              <div className="mt-3 text-center p-2 bg-gradient-to-r from-purple-500/20 to-pink-500/20 rounded-lg border border-purple-400/30">
+                <span className="text-xs text-gray-300">胜率：</span>
+                <span className="text-base font-bold bg-gradient-to-r from-purple-300 to-pink-300 bg-clip-text text-transparent">
+                  {statistics.totalGames > 0 ? ((statistics.wins / statistics.totalGames) * 100).toFixed(1) : 0}%
+                </span>
+              </div>
+            </div>
+          )}
+
+          {/* Task Input Section */}
+          <div className="space-y-3">
+
+            {/* Add New Site */}
+            <div className="mb-3">
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={newSite}
+                  onChange={(e) => setNewSite(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && addBlockedSite()}
+                  placeholder="输入网站，如：zhihu"
+                  className="flex-1 px-3 py-2 rounded-lg bg-white/10 border border-white/20 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent text-xs transition-all duration-300"
+                />
+                <button
+                  onClick={addBlockedSite}
+                  className="px-4 py-2 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 rounded-lg text-xs font-bold transition-all duration-300 shadow-lg hover:shadow-purple-500/50 hover:scale-105 active:scale-95"
+                >
+                  ➕
+                </button>
+              </div>
+            </div>
+
+            {/* Blocked Sites List */}
+            <div className="space-y-1.5">
+              {userSettings.blockedSites.map((site, index) => (
+                <div key={index} className="flex items-center justify-between bg-white/5 hover:bg-white/10 rounded-lg px-3 py-2 transition-all duration-300 border border-white/5 group">
+                  <span className="text-xs truncate flex-1 text-gray-300 group-hover:text-white">{site}</span>
+                  <button
+                    onClick={() => removeBlockedSite(index)}
+                    className="ml-2 text-red-400 hover:text-red-300 transition-all duration-300 hover:scale-125"
+                  >
+                    ❌
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Stats */}
+        {!showSettings && statistics && statistics.totalGames > 0 && (
+          <div className="relative mx-6 mb-3 bg-gradient-to-br from-black/40 to-black/30 rounded-xl p-4 shrink-0 border border-white/10 backdrop-blur-md shadow-xl animate-[fadeIn_0.5s_ease-out]">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-white/5 rounded-lg p-2 border border-white/10">
+                <div className="text-xs text-gray-400">游戏数</div>
+                <div className="text-lg font-bold text-white">{statistics.totalGames}</div>
+              </div>
+              <div className="bg-green-500/10 rounded-lg p-2 border border-green-500/20">
+                <div className="text-xs text-green-400">胜利</div>
+                <div className="text-lg font-bold text-green-300">{statistics.wins}</div>
+              </div>
+              <div className="bg-red-500/10 rounded-lg p-2 border border-red-500/20">
+                <div className="text-xs text-red-400">失败</div>
+                <div className="text-lg font-bold text-red-300">{statistics.losses}</div>
+              </div>
+              <div className="bg-yellow-500/10 rounded-lg p-2 border border-yellow-500/20">
+                <div className="text-xs text-yellow-400">弃牌</div>
+                <div className="text-lg font-bold text-yellow-300">{statistics.folds}</div>
+              </div>
+            </div>
+            <div className="mt-3 text-center p-2 bg-gradient-to-r from-purple-500/20 to-pink-500/20 rounded-lg border border-purple-400/30">
+              <span className="text-xs text-gray-300">胜率：</span>
+              <span className="text-base font-bold bg-gradient-to-r from-purple-300 to-pink-300 bg-clip-text text-transparent">
+                {statistics.totalGames > 0 ? ((statistics.wins / statistics.totalGames) * 100).toFixed(1) : 0}%
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* Task Input */}
+        <div className="relative flex flex-col px-6 py-4">
+          <label className="text-sm font-semibold text-gray-200 mb-2 animate-[fadeIn_0.7s_ease-out]">🎯 你要专注做什么？</label>
+          <input
+            type="text"
+            value={taskName}
+            onChange={(e) => setTaskName(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && startGame()}
+            placeholder="例如：修复登录问题"
+            className="w-full px-4 py-3 rounded-xl bg-white/90 border-2 border-purple-300/50 text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-purple-500 focus:bg-white mb-3 transition-all duration-300 focus:scale-[1.02] shadow-lg animate-[fadeIn_0.8s_ease-out]"
+          />
+
+          <div className="flex items-center justify-center gap-4 mb-3 text-xs text-gray-300 animate-[fadeIn_0.9s_ease-out]">
+            <div className="flex items-center gap-1.5 bg-black/30 px-3 py-1.5 rounded-full border border-white/10">
+              <span className="text-yellow-400">💰</span>
+              <span>盲注: 1</span>
+            </div>
+            <div className="flex items-center gap-1.5 bg-black/30 px-3 py-1.5 rounded-full border border-white/10">
+              <span className="text-blue-400">⏱️</span>
+              <span>{userSettings.testMode ? '1分钟' : '25分钟'}</span>
+            </div>
+            <div className="flex items-center gap-1.5 bg-black/30 px-3 py-1.5 rounded-full border border-white/10">
+              <span className="text-green-400">🎁</span>
+              <span>底池: 2</span>
+            </div>
+          </div>
+
+          {/* Test Mode Toggle */}
+          <div className="mb-4 flex items-center justify-center gap-2 text-sm animate-[fadeIn_1s_ease-out]">
+            <label className="flex items-center gap-2 cursor-pointer bg-black/30 px-4 py-2 rounded-full border border-white/10 hover:border-purple-500/50 transition-all duration-300 hover:scale-105">
+              <input
+                type="checkbox"
+                checked={userSettings.testMode}
+                onChange={toggleTestMode}
+                className="w-4 h-4 rounded border-gray-400 text-purple-600 focus:ring-purple-500 cursor-pointer"
+              />
+              <span className="text-gray-300">⚡ 测试模式 (1分钟)</span>
+            </label>
+          </div>
+
+          <button
+            onClick={startGame}
+            disabled={!taskName.trim() || userSettings.chips < 1}
+            className="w-full py-4 bg-gradient-to-r from-green-600 via-emerald-600 to-teal-600 hover:from-green-500 hover:via-emerald-500 hover:to-teal-500 disabled:from-gray-600 disabled:via-gray-600 disabled:to-gray-600 disabled:cursor-not-allowed rounded-xl font-bold text-lg transition-all duration-300 shadow-2xl hover:shadow-green-500/50 hover:scale-[1.02] active:scale-[0.98] border border-green-400/20 animate-[fadeIn_1.1s_ease-out]"
+          >
+            🎴 发牌并开始专注
+          </button>
+
+          {userSettings.chips < 1 && (
+            <div className="flex items-center justify-center gap-2 text-red-400 text-sm text-center mt-2 bg-red-500/10 py-2 px-4 rounded-lg border border-red-500/20 animate-pulse">
+              <span>⚠️</span>
+              <span>筹码不足</span>
+            </div>
+          )}
+
+          {/* Dev Reset Button */}
+          <button
+            onClick={resetStorage}
+            className="w-full mt-3 py-2 bg-gradient-to-r from-gray-700 to-gray-600 hover:from-gray-600 hover:to-gray-500 text-gray-300 text-xs rounded-lg transition-all duration-300 hover:shadow-lg border border-gray-500/20 animate-[fadeIn_1.2s_ease-out]"
+          >
+            🔧 重置数据（测试用）
+          </button>
+        </div>
+
+        {/* Confirmation Dialog */}
+        {confirmDialog && (
+          <div className="fixed inset-0 bg-black/90 backdrop-blur-sm flex items-center justify-center z-50 animate-[fadeIn_0.2s_ease-out]">
+            <div className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-2xl p-6 max-w-xs mx-4 border-2 border-white/10 shadow-2xl animate-[fadeIn_0.3s_ease-out]">
+              <h3 className="text-xl font-bold text-white mb-3 flex items-center gap-2">
+                <span className="text-2xl">⚠️</span>
+                {confirmDialog.title}
+              </h3>
+              <p className="text-sm text-gray-300 mb-6 leading-relaxed">{confirmDialog.message}</p>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setConfirmDialog(null)}
+                  className="flex-1 py-2.5 px-4 bg-gradient-to-r from-gray-600 to-gray-700 hover:from-gray-500 hover:to-gray-600 text-white text-sm rounded-xl font-semibold transition-all duration-300 shadow-lg hover:shadow-gray-500/50 hover:scale-105 active:scale-95 border border-gray-500/20"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={confirmDialog.onConfirm}
+                  className="flex-1 py-2.5 px-4 bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white text-sm rounded-xl font-semibold transition-all duration-300 shadow-lg hover:shadow-red-500/50 hover:scale-105 active:scale-95 border border-red-400/20"
+                >
+                  确定
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        </div>
+      </div>
+    );
+  }
+
+  // In-game view
+  const revealedCount = getRevealedCardsCount(remainingTime, gameState.duration);
+
+  return (
+    <div className="w-full h-full bg-gradient-to-br from-slate-900 via-green-950 to-slate-900 text-white flex justify-center">
+      <div className="relative w-full max-w-sm h-full flex flex-col shadow-2xl">
+      {/* Decorative gradient overlay */}
+      <div className="absolute inset-0 bg-gradient-to-br from-green-500/5 via-transparent to-emerald-500/5 pointer-events-none -z-10"></div>
+
+      {/* Top Bar */}
+      <div className="relative bg-gradient-to-r from-black/60 via-black/50 to-black/60 backdrop-blur-md px-6 py-3 flex justify-between items-center shrink-0 border-b border-white/10 shadow-lg">
+        <div className="text-2xl font-bold text-white drop-shadow-[0_0_10px_rgba(255,255,255,0.5)] animate-pulse">
+          {formatTime(remainingTime)}
+        </div>
+        <div className="flex items-center gap-3 text-sm">
+          <div className="flex items-center gap-1.5 bg-amber-500/20 px-3 py-1.5 rounded-full border border-yellow-400/30">
+            <span className="text-lg">💰</span>
+            <span className="font-bold text-yellow-300">{userSettings.chips.toFixed(1)}</span>
+          </div>
+          <div className="flex items-center gap-1.5 bg-green-500/20 px-3 py-1.5 rounded-full border border-green-400/30">
+            <span className="text-lg">🎁</span>
+            <span className="font-bold text-green-300">{gameState.pot}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Task Name */}
+      <div className="relative px-6 py-2 bg-gradient-to-r from-black/20 via-black/30 to-black/20 text-center text-sm text-gray-200 shrink-0 border-b border-white/5">
+        <span className="font-semibold">🎯 {gameState.taskName}</span>
+      </div>
+
+      {/* Table Area */}
+      <div className="relative flex-1 px-6 py-4 flex flex-col justify-around min-h-[300px]">
+        {/* Poker table felt effect */}
+        <div className="absolute inset-0 bg-gradient-to-b from-green-900/20 via-emerald-900/30 to-green-900/20 pointer-events-none"></div>
+
+        {/* Community Cards */}
+        <div className="relative flex justify-center gap-2">
+          {gameState.communityCards.slice(0, 5).map((card, index) => (
+            <div key={index} style={{ animationDelay: `${index * 0.1}s` }} className={index < revealedCount ? "animate-[cardFlip_0.5s_ease-out]" : ""}>
+              {index < revealedCount ? (
+                <Card card={card} />
+              ) : (
+                <CardBack />
+              )}
+            </div>
+          ))}
+        </div>
+
+        {/* Villain Hand */}
+        <div className="relative flex flex-col items-center">
+          <div className="text-xs font-semibold text-gray-400 mb-1.5 bg-black/30 px-3 py-1 rounded-full border border-white/10">
+            🎭 对手
+          </div>
+          <div className="flex gap-2">
+            <CardBack />
+            <CardBack />
+          </div>
+        </div>
+
+        {/* My Hand */}
+        <div className="relative flex flex-col items-center">
+          <div className="text-xs font-semibold text-gray-400 mb-1.5 bg-black/30 px-3 py-1 rounded-full border border-white/10">
+            🎴 你的手牌
+          </div>
+          <div className="flex gap-2">
+            {gameState.myHand.map((card, index) => (
+              <div key={index} style={{ animationDelay: `${index * 0.1}s` }} className="animate-[cardFlip_0.5s_ease-out]">
+                <Card card={card} />
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Action Bar */}
+      <div className="relative px-6 py-4 bg-gradient-to-t from-black/70 via-black/60 to-black/40 backdrop-blur-md shrink-0 border-t border-white/10 shadow-2xl">
+        {remainingTime > 0 ? (
+          <div className="space-y-2.5">
+            <button
+              onClick={giveUp}
+              className="w-full py-3 bg-gradient-to-r from-red-600 via-red-600 to-rose-600 hover:from-red-500 hover:via-red-500 hover:to-rose-500 rounded-xl font-bold text-base transition-all duration-300 shadow-lg hover:shadow-red-500/50 hover:scale-[1.02] active:scale-[0.98] border border-red-400/20"
+            >
+              🚪 放弃（弃牌）
+            </button>
+            <button
+              onClick={resetStorage}
+              className="w-full py-2 bg-gradient-to-r from-gray-700 to-gray-600 hover:from-gray-600 hover:to-gray-500 text-gray-300 text-xs rounded-lg transition-all duration-300 hover:shadow-lg border border-gray-500/20"
+            >
+              🔧 重置数据
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-2.5">
+            <div className="text-center text-lg font-bold mb-2 animate-pulse">
+              <span className="bg-gradient-to-r from-green-300 via-emerald-300 to-teal-300 bg-clip-text text-transparent drop-shadow-[0_0_15px_rgba(16,185,129,0.8)]">
+                🎉 专注时间完成！
+              </span>
+            </div>
+            <button
+              onClick={settleGame}
+              className="w-full py-3 bg-gradient-to-r from-yellow-600 via-amber-600 to-orange-600 hover:from-yellow-500 hover:via-amber-500 hover:to-orange-500 rounded-xl font-bold text-base transition-all duration-300 shadow-lg hover:shadow-yellow-500/50 hover:scale-[1.02] active:scale-[0.98] border border-yellow-400/20"
+            >
+              🎴 开牌决胜负
+            </button>
+            <button
+              onClick={resetStorage}
+              className="w-full py-2 bg-gradient-to-r from-gray-700 to-gray-600 hover:from-gray-600 hover:to-gray-500 text-gray-300 text-xs rounded-lg transition-all duration-300 hover:shadow-lg border border-gray-500/20"
+            >
+              🔧 重置数据
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Confirmation Dialog */}
+      {confirmDialog && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
+          <div className="bg-gray-800 rounded-lg p-6 max-w-sm mx-4 border border-gray-600">
+            <h3 className="text-xl font-bold text-white mb-3">{confirmDialog.title}</h3>
+            <p className="text-gray-300 mb-6">{confirmDialog.message}</p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setConfirmDialog(null)}
+                className="flex-1 py-2 px-4 bg-gray-600 hover:bg-gray-500 text-white rounded-lg font-medium transition-colors"
+              >
+                取消
+              </button>
+              <button
+                onClick={confirmDialog.onConfirm}
+                className="flex-1 py-2 px-4 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium transition-colors"
+              >
+                确定
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      </div>
+    </div>
+  );
+}
+
+// Card component - Premium version
+function Card({ card, highlight = false }: { card: string; highlight?: boolean }) {
+  const display = getCardDisplay(card as any);
+  const color = getSuitColor(card[1]);
+
+  return (
+    <div className={`
+      relative w-12 h-16 bg-gradient-to-br from-white via-gray-50 to-white
+      rounded-lg shadow-xl flex items-center justify-center
+      transition-all duration-300
+      border-2 ${highlight ? 'border-yellow-400' : 'border-gray-200'}
+      ${highlight ? 'ring-4 ring-yellow-400/50 shadow-[0_0_25px_rgba(250,204,21,0.9)] scale-110 -translate-y-1' : 'hover:scale-105 hover:-translate-y-0.5'}
+    `}>
+      {/* Inner glow effect */}
+      {highlight && (
+        <div className="absolute inset-0 bg-gradient-to-br from-yellow-200/30 to-amber-200/30 rounded-lg animate-pulse"></div>
+      )}
+
+      {/* Card value */}
+      <div className={`
+        relative text-xl font-bold
+        ${color === 'red' ? 'text-red-600' : 'text-gray-900'}
+        drop-shadow-sm
+      `}>
+        {display}
+      </div>
+
+      {/* Corner shine effect */}
+      <div className="absolute top-0 right-0 w-6 h-6 bg-gradient-to-br from-white/60 to-transparent rounded-tl-lg rounded-br-full"></div>
+    </div>
+  );
+}
+
+// Card back component - Premium version
+function CardBack() {
+  return (
+    <div className="
+      relative w-12 h-16
+      bg-gradient-to-br from-blue-700 via-blue-600 to-blue-800
+      rounded-lg shadow-xl
+      flex items-center justify-center
+      border-2 border-blue-400/30
+      overflow-hidden
+      hover:scale-105 hover:-translate-y-0.5 transition-all duration-300
+    ">
+      {/* Animated pattern background */}
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_50%,rgba(255,255,255,0.1),transparent_50%)]"></div>
+
+      {/* Card back symbol */}
+      <div className="relative text-2xl drop-shadow-[0_2px_4px_rgba(0,0,0,0.5)]">
+        🂠
+      </div>
+
+      {/* Corner accents */}
+      <div className="absolute top-1 left-1 w-2 h-2 border-l-2 border-t-2 border-blue-300/50 rounded-tl"></div>
+      <div className="absolute bottom-1 right-1 w-2 h-2 border-r-2 border-b-2 border-blue-300/50 rounded-br"></div>
+    </div>
+  );
+}

@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Privacy Policy - All-In Focus</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            line-height: 1.6;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            color: #333;
+        }
+        h1 {
+            color: #16a34a;
+            border-bottom: 2px solid #16a34a;
+            padding-bottom: 10px;
+        }
+        h2 {
+            color: #15803d;
+            margin-top: 30px;
+        }
+        .last-updated {
+            color: #666;
+            font-style: italic;
+        }
+        ul {
+            margin-left: 20px;
+        }
+        li {
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Privacy Policy for All-In Focus</h1>
+    <p class="last-updated">Last updated: December 23, 2025</p>
+
+    <h2>Overview</h2>
+    <p>
+        All-In Focus is a productivity Chrome extension that helps users stay focused by combining
+        the Pomodoro Technique with Texas Hold'em poker mechanics. This privacy policy explains how
+        the extension handles your data.
+    </p>
+
+    <h2>Data Collection</h2>
+    <p>All-In Focus stores the following data <strong>locally on your device only</strong>:</p>
+    <ul>
+        <li><strong>Focus session data:</strong> Your focus task descriptions and session history</li>
+        <li><strong>Game statistics:</strong> Your chip count, win/loss records, and poker hand history</li>
+        <li><strong>Blocked websites list:</strong> The list of websites you want to block during focus sessions</li>
+        <li><strong>Settings:</strong> Your preferences for blocked sites and game settings</li>
+    </ul>
+
+    <h2>Data Storage</h2>
+    <p>
+        All data is stored locally using Chrome's <code>chrome.storage.local</code> API.
+        <strong>No data is transmitted to any external servers or third parties.</strong>
+    </p>
+
+    <h2>Data Usage</h2>
+    <p>The extension uses your data solely to:</p>
+    <ul>
+        <li>Track your focus sessions and display them to you</li>
+        <li>Maintain your game progress (chips, statistics)</li>
+        <li>Block specified websites during focus sessions</li>
+        <li>Provide you with session summaries and statistics</li>
+    </ul>
+
+    <h2>Permissions Explained</h2>
+    <p>All-In Focus requests the following permissions:</p>
+    <ul>
+        <li><strong>storage:</strong> To save your session data, game statistics, and settings locally</li>
+        <li><strong>alarms:</strong> To trigger timers for Pomodoro sessions and card reveals</li>
+        <li><strong>declarativeNetRequest & declarativeNetRequestWithHostAccess:</strong>
+            To block specified websites during focus sessions</li>
+        <li><strong>tabs:</strong> To detect when you attempt to visit blocked sites</li>
+        <li><strong>notifications:</strong> To notify you when sessions end or cards are revealed</li>
+        <li><strong>offscreen:</strong> To play audio notifications</li>
+        <li><strong>webNavigation:</strong> To intercept navigation to blocked sites</li>
+        <li><strong>host_permissions (*://*/*):</strong> Required to block any website you choose
+            to add to your blocked list</li>
+    </ul>
+
+    <h2>Third-Party Services</h2>
+    <p>
+        All-In Focus does <strong>not</strong> use any third-party analytics, tracking, or advertising services.
+        The extension operates entirely offline after installation.
+    </p>
+
+    <h2>Data Sharing</h2>
+    <p>
+        <strong>We do not share, sell, or transmit any of your data.</strong> All data remains on your device.
+    </p>
+
+    <h2>Data Deletion</h2>
+    <p>
+        You can delete all extension data at any time by:
+    </p>
+    <ul>
+        <li>Uninstalling the extension (which removes all stored data)</li>
+        <li>Using Chrome's extension storage management tools</li>
+        <li>Clearing Chrome's extension data from <code>chrome://settings/clearBrowserData</code></li>
+    </ul>
+
+    <h2>Children's Privacy</h2>
+    <p>
+        All-In Focus does not knowingly collect any information from children under 13.
+        The extension does not collect personal information from users of any age.
+    </p>
+
+    <h2>Changes to This Policy</h2>
+    <p>
+        We may update this privacy policy from time to time. Any changes will be reflected with
+        an updated "Last updated" date at the top of this policy.
+    </p>
+
+    <h2>Contact</h2>
+    <p>
+        If you have any questions about this privacy policy, please contact us through the
+        <a href="https://github.com/yourusername/focus-holdem/issues">GitHub Issues page</a>.
+    </p>
+
+    <hr style="margin-top: 40px; border: none; border-top: 1px solid #ddd;">
+    <p style="text-align: center; color: #666; font-size: 14px;">
+        All-In Focus - A productivity tool that respects your privacy
+    </p>
+</body>
+</html>
