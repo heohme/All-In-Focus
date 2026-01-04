@@ -8,7 +8,6 @@
     "alarms",
     "declarativeNetRequest",
     "declarativeNetRequestWithHostAccess",
-    "tabs",
     "notifications",
     "offscreen",
     "webNavigation"
