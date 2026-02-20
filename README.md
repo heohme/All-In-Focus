@@ -2,6 +2,8 @@ Allin focus
 
 新年第一提，坚持
 
+坚持种一棵树
+
 # Focus Hold'em
 
 A Chrome Extension that combines Texas Hold'em poker mechanics with the Pomodoro Technique to help you stay focused.
