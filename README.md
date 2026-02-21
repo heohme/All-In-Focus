@@ -4,6 +4,8 @@ Allin focus
 
 坚持种一棵树, 坐标云南、普洱
 
+期待景迈山
+
 # Focus Hold'em
 
 A Chrome Extension that combines Texas Hold'em poker mechanics with the Pomodoro Technique to help you stay focused.
